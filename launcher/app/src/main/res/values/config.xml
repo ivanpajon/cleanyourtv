@@ -9,10 +9,10 @@
 
     <!-- Apps pinned to the dock row at the bottom, in this order. Missing apps are skipped. -->
     <string-array name="dock_apps">
-        <item>com.netflix.ninja</item>
-        <item>com.amazon.amazonvideo.livingroom</item>
         <item>com.google.android.youtube.tv</item>
-        <item>in.startv.hotstar</item>
+        <item>com.crunchyroll.crunchyroid</item>
+        <item>com.amazon.amazonvideo.livingroom</item>
+        <item>com.android.vending</item>
     </string-array>
     <!-- With fewer dock_apps than columns (or a dock app that is not installed), the free dock slots take
          the first grid apps, so the dock never shows a gap. false leaves them empty (#162); a theme can
@@ -83,6 +83,7 @@
          app each such "global key" was routed to. Check with the real remote: keys injected over ADB never
          reach InputKeyService. Leave empty to omit. -->
     <integer-array name="input_key_keycodes">
+        <item>130</item> <!-- KEYCODE_MEDIA_RECORD: the Xiaomi MiTV-MOOQ0 remote's INPUT button -->
     </integer-array>
     <!-- Remote buttons that open an app, as "keycode:package" or "KEYCODE_NAME:package" (INPUT_KEY_SERVICE=1 or
          HOME_KEY_SERVICE=1; both read this one list, and a theme's config.json can set it too). On Google TV the
