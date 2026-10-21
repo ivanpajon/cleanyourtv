@@ -277,7 +277,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             updateRace();
             updateWifiLabel();
             sky.update();
-            wallpaperPlayer.update();
             handler.postDelayed(this, MINUTE_MS);
         }
     };

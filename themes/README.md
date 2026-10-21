@@ -54,6 +54,9 @@ is ignored, and a file that doesn't parse is ignored as a whole, so a theme can 
 | `sky_intensity` | 0 to 100 | Time-of-day backdrop: a dark gradient that follows the clock, 0 hides it (default) |
 | `wallpaper` | bool | Show `wallpaper.jpg` from the theme folder (`true`), or ignore it (`false`) |
 | `wallpaper_rotation_minutes` | 0 to 1440 | Randomly rotate images in the theme's `wallpapers/` folder at this interval; 0 keeps the single-image behaviour |
+| `wallpaper_rotation_seconds` | 5 to 86400 | The same interval in seconds, for faster rotations; wins over `wallpaper_rotation_minutes` |
+| `wallpaper_fade_seconds` | 0 to 120 | Crossfade from one rotating image to the next over this many seconds, at most the rotation interval minus one second; 0 (default) cuts. Off while animations are off or `reduced_motion` is on; the TV's animator duration scale (Developer options) shortens it, and 0 there cuts |
+| `wallpaper_motion` | true/false | A slow, subtle wave over the wallpaper images, drawn by the GPU at 960 px wide and 15 frames a second; false by default. Off while animations are off, `reduced_motion` is on or the TV's animator duration scale is 0. If it ever fails to draw, Home shows still pictures until the theme is pushed again |
 | `wallpaper_dim` | 0 to 90 | Black overlay over wallpaper images, in percent; 0 by default |
 | `festival` | string | Turns on a festive skin: the network pill becomes a diya whose flame follows the connection, Inputs a temple bell, Settings a marigold, and the first Home of the day gets a petal shower. `dussehra` and `diwali` have built-in greetings |
 | `festival_until` | `YYYY-MM-DD` | Last day the festive skin shows; it switches itself off after that. A malformed date turns it off |
@@ -89,7 +92,9 @@ An empty collection falls back to `wallpaper.jpg`, or the background colour if n
 Selection is random without an immediate repeat when alternatives exist. The current image and its
 change time survive app/process restarts. Rotation runs only while Home is visible; on return from
 another app, an overdue background changes then. Images are decoded on a worker thread and bounded
-to the screen size. There is no download service, Internet permission or computer-side scheduler.
+to the screen size. `"wallpaper_fade_seconds": 30` turns each change into a slow crossfade instead of a cut;
+the fade redraws only when its alpha moves a visible step (a few times a second), and leaving Home finishes
+it at once. There is no download service, Internet permission or computer-side scheduler.
 The original system idle screensaver is left unchanged.
 
 On the TV, Launcher settings has a Wallpaper row: pick one picture from the collection (or the theme's

@@ -31,4 +31,12 @@ final class WallpaperSize {
         }
         return height > screenH ? new int[]{height, screenH} : null;
     }
+
+    /** {x, y}: the part of a picture CENTER_CROP shows on the screen, as fractions of its width and height. */
+    static float[] cropScale(int width, int height, int screenW, int screenH) {
+        if ((long) screenW * height >= (long) screenH * width) {   // width limits the cover: the top and bottom are cut
+            return new float[]{1f, (float) screenH * width / ((float) screenW * height)};
+        }
+        return new float[]{(float) screenW * height / ((float) screenH * width), 1f};
+    }
 }

@@ -36,6 +36,8 @@ final class Config {
     static final String SETTINGS_NAME = "launcher_settings";
     static final String ROWS_BELOW_DOCK_KEY = "rows_below_dock";
     static final String WALLPAPER_CHOICE_KEY = "wallpaper_choice";
+    /** Set from each start of the wallpaper motion until its first frame; still set at Home's next launch, it crashed. */
+    static final String MOTION_PENDING_KEY = "wallpaper_motion_pending";
     private static final String THEME_REVISION_NAME = "theme_revision";
     private static final String THEME_SIGNATURE_KEY = "theme_signature";
 
@@ -94,7 +96,12 @@ final class Config {
     final File wallpaper;
     /** Rotating theme images, or the single wallpaper when no collection is configured. */
     final List<File> wallpapers;
-    final int wallpaperRotationMinutes;
+    /** Seconds between rotating images (wallpaper_rotation_seconds, or wallpaper_rotation_minutes × 60); 0 is off. */
+    final int wallpaperRotationSeconds;
+    /** Crossfade between rotating images, in seconds (config.json, wallpaper_fade_seconds); 0 cuts. */
+    final int wallpaperFadeSeconds;
+    /** A slow wave over the wallpaper (config.json, wallpaper_motion); off after it failed until the next theme push. */
+    final boolean wallpaperMotion;
     final int wallpaperDim;
     /** Whether the overlay file was present and parsed. */
     final boolean overlayApplied;
@@ -112,7 +119,8 @@ final class Config {
                    boolean shamsiDate, String greetingName, boolean moduleCards, boolean reducedMotion, boolean dockTitle, boolean dockRow, boolean reorderButton, String vpnApp,
                    boolean showHomeSettingsShortcut, boolean showStats, boolean appLibrary, int backgroundColor, int skyIntensity,
                    int[] settingsKeycodes, boolean settingsKeyPanel, boolean wallpaperEnabled, File wallpaper, List<File> wallpapers,
-                   int wallpaperRotationMinutes, int wallpaperDim, boolean overlayApplied,
+                   int wallpaperRotationSeconds, int wallpaperFadeSeconds, boolean wallpaperMotion, int wallpaperDim,
+                   boolean overlayApplied,
                    Festival festival, int[] inputKeycodes, List<String> appKeys,
                    List<RaceWeekend.Race> raceCalendar, boolean cinematicHome) {
         this.inputKeycodes = inputKeycodes;
@@ -150,7 +158,9 @@ final class Config {
         this.wallpaperEnabled = wallpaperEnabled;
         this.wallpaper = wallpaper;
         this.wallpapers = Collections.unmodifiableList(wallpapers);
-        this.wallpaperRotationMinutes = wallpaperRotationMinutes;
+        this.wallpaperRotationSeconds = wallpaperRotationSeconds;
+        this.wallpaperFadeSeconds = wallpaperFadeSeconds;
+        this.wallpaperMotion = wallpaperMotion;
         this.wallpaperDim = wallpaperDim;
         this.overlayApplied = overlayApplied;
         this.festival = festival;
@@ -255,9 +265,14 @@ final class Config {
         boolean wallpaperEnabled = json == null || bool(json, "wallpaper", true);
         if (!wallpaperEnabled) wallpaper = null;
         int rotationMinutes = json == null ? 0 : integer(json, "wallpaper_rotation_minutes", 0, 0, 1440);
+        // Seconds win over minutes when both are set; below 5 s a change would barely be seen before the next.
+        int rotationSeconds = json == null ? 0 : integer(json, "wallpaper_rotation_seconds", rotationMinutes * 60, 5, 86400);
+        int fadeSeconds = json == null ? 0 : integer(json, "wallpaper_fade_seconds", 0, 0, 120);
+        boolean motion = json != null && bool(json, "wallpaper_motion", false)
+                && !choices.getBoolean(MOTION_PENDING_KEY, false);
         int wallpaperDim = json == null ? 0 : integer(json, "wallpaper_dim", 0, 0, 90);
         List<File> wallpapers = new ArrayList<>();
-        if (rotationMinutes > 0 && dir != null && wallpaperEnabled) {
+        if (rotationSeconds > 0 && dir != null && wallpaperEnabled) {
             wallpapers.addAll(WallpaperRotation.images(new File(dir, "wallpapers")));
         }
         if (wallpapers.isEmpty() && wallpaper != null) wallpapers.add(wallpaper);
@@ -290,7 +305,7 @@ final class Config {
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, greetingName, moduleCards, reducedMotion, dockTitle, dockRow, reorderButton, vpn, homeSettings, showStats, library, background,
                 Math.max(0, Math.min(100, skyIntensity)), settingsKeycodes, settingsKeyPanel, wallpaperEnabled, wallpaper,
-                wallpapers, rotationMinutes, wallpaperDim, applied,
+                wallpapers, rotationSeconds, fadeSeconds, motion, wallpaperDim, applied,
                 festival, inputKeycodes, appKeys, json == null ? Collections.emptyList() : raceCalendar(json), cinematic);
     }
 
@@ -334,11 +349,12 @@ final class Config {
             // explicit theme push or reset by the updated tools.
             SharedPreferences.Editor editor = choices.edit();
             if (!"absent".equals(token)) editor.remove("columns").remove("animations")
-                    .remove("advanced_effects").remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY);
+                    .remove("advanced_effects").remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY)
+                    .remove(MOTION_PENDING_KEY);
             editor.putString(THEME_SIGNATURE_KEY, signature).commit();
         } else if (!seen.equals(signature)) {
             choices.edit().remove("columns").remove("animations").remove("advanced_effects")
-                    .remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY)
+                    .remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY).remove(MOTION_PENDING_KEY)
                     .putString(THEME_SIGNATURE_KEY, signature).commit();
         }
     }

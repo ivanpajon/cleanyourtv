@@ -69,6 +69,26 @@ public class WallpaperRotationTest {
         assertTrue(WallpaperRotation.due(20 * minute, 10 * minute, 5 * minute));   // clock went back
     }
 
+    @Test
+    public void waitIsTheTimeLeftAndNeverMoreThanOneInterval() {
+        long second = 1000L;
+        assertEquals(3 * second, WallpaperRotation.wait(2 * second, 4 * second, 5 * second));
+        assertEquals(5 * second, WallpaperRotation.wait(0, 60 * second, 5 * second));          // already due
+        assertEquals(5 * second, WallpaperRotation.wait(5 * second, 10 * second, 5 * second)); // due right now
+        assertEquals(5 * second, WallpaperRotation.wait(600 * second, 10 * second, 5 * second)); // clock went back
+    }
+
+    @Test
+    public void fadeAlphaRunsFromZeroToOneInScreenSteps() {
+        assertEquals(0f, WallpaperRotation.fadeAlpha(0f), 0f);
+        assertEquals(1f, WallpaperRotation.fadeAlpha(1f), 0f);
+        assertEquals(0f, WallpaperRotation.fadeAlpha(-0.2f), 0f);   // interpolator overshoot stays in range
+        assertEquals(1f, WallpaperRotation.fadeAlpha(1.2f), 0f);
+        // Nearby fractions share a step, so the frames between them redraw nothing.
+        assertEquals(WallpaperRotation.fadeAlpha(0.5000f), WallpaperRotation.fadeAlpha(0.5005f), 0f);
+        assertEquals(128 / 255f, WallpaperRotation.fadeAlpha(0.5f), 0f);
+    }
+
     private static List<String> names(List<File> files) {
         String[] out = new String[files.size()];
         for (int i = 0; i < out.length; i++) out[i] = files.get(i).getName();

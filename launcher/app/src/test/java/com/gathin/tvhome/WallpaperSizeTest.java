@@ -42,6 +42,12 @@ public class WallpaperSizeTest {
         assertNull(WallpaperSize.coverScale(1280, 720, 1920, 1080));
     }
 
+    @Test public void cropScaleIsThePartCenterCropShows() {
+        assertArrayEquals(new float[]{1f, 1f}, WallpaperSize.cropScale(960, 540, 960, 540), 1e-6f);
+        assertArrayEquals(new float[]{0.5f, 1f}, WallpaperSize.cropScale(1920, 540, 960, 540), 1e-6f);    // wider: sides cut
+        assertArrayEquals(new float[]{1f, 0.5625f}, WallpaperSize.cropScale(960, 960, 960, 540), 1e-6f);  // square: top/bottom cut
+    }
+
     @Test
     public void aPhoneSizedPhotoIsAcceptedOnceSampledDown() {
         int s = WallpaperSize.sampleSize(4032, 3024, 1920, 1080);

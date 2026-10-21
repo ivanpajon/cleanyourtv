@@ -40,4 +40,18 @@ final class WallpaperRotation {
     static boolean due(long previous, long now, long interval) {
         return interval > 0 && (previous == 0 || now < previous || now - previous >= interval);
     }
+
+    /** Milliseconds until the next change is due; one interval when it is already due or the clock went back. */
+    static long wait(long previous, long now, long interval) {
+        long left = previous + interval - now;
+        return left > 0 && left <= interval ? left : interval;
+    }
+
+    /**
+     * A crossfade's alpha in the 256 steps the screen can show: frames that land on the same step set the same
+     * alpha and draw nothing, so a 30-second fade redraws a few times a second instead of on every frame.
+     */
+    static float fadeAlpha(float fraction) {
+        return Math.round(Math.max(0f, Math.min(1f, fraction)) * 255) / 255f;
+    }
 }

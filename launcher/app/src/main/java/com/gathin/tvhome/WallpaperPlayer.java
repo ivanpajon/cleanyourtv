@@ -1,13 +1,18 @@
 package com.gathin.tvhome;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.PorterDuff;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
@@ -21,10 +26,17 @@ import java.util.concurrent.Executors;
 /** Displays and rotates a theme's local wallpaper images while Home is visible. */
 final class WallpaperPlayer {
     private final FrameLayout root;
+    /** The picture; with wallpaper_motion, the still cover over the wave while that has no frame on screen. */
     private final ImageView image;
+    /** The next picture, faded in over {@link #image}; null when the theme cuts instead of fading. */
+    private final ImageView incoming;
+    /** The moving wallpaper (wallpaper_motion), under {@link #image}; null for still pictures. */
+    private WallpaperWave wave;
     private final List<File> files;
     private final long interval;
+    private final long fade;
     private final SharedPreferences preferences;
+    private final SharedPreferences settings;
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
     private final Random random = new Random();
     private final int width;
@@ -32,32 +44,75 @@ final class WallpaperPlayer {
     private boolean active;
     private boolean closed;
     private boolean loading;
+    private ValueAnimator fading;
     private String displayed = "";
+    /** The picture the wave shows, for the cover to take over while Home is paused. */
+    private Bitmap current;
+    /** The rotation keeps its own time, so intervals shorter than Home's minute tick work. */
+    private final Runnable tick = this::update;
 
     WallpaperPlayer(Context context, FrameLayout root, Config config) {
         this.root = root;
         files = new ArrayList<>(config.wallpapers);
-        interval = config.wallpaperRotationMinutes * 60_000L;
+        interval = config.wallpaperRotationSeconds * 1000L;
+        // Ends at least a second before the next tick, so every picture is seen whole for a moment.
+        fade = config.animations && !config.reducedMotion
+                ? Math.min(config.wallpaperFadeSeconds * 1000L, interval - 1000) : 0;
         preferences = context.getSharedPreferences("wallpaper_rotation", Context.MODE_PRIVATE);
+        settings = context.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE);
+        boolean shown = config.wallpaperEnabled && !files.isEmpty();
+        boolean motion = shown && config.wallpaperMotion && config.animations && !config.reducedMotion
+                && ValueAnimator.areAnimatorsEnabled();
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
-        width = metrics.widthPixels;
-        height = metrics.heightPixels;
-        image = new ImageView(context);
-        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        if (config.wallpaperEnabled && !files.isEmpty()) {
-            root.addView(image, 0, new FrameLayout.LayoutParams(
+        // The wave renders small and the display scales it up: its pictures need no more pixels than that.
+        width = motion ? WallpaperWave.RENDER_WIDTH : metrics.widthPixels;
+        height = motion ? Math.round((float) WallpaperWave.RENDER_WIDTH * metrics.heightPixels / metrics.widthPixels)
+                : metrics.heightPixels;
+        image = picture(context);
+        // A second full-screen view only for a fading rotation: it is overdraw on 1 GB TVs, and stays GONE between fades.
+        boolean fades = shown && !motion && fade > 0 && files.size() > 1;
+        incoming = fades ? picture(context) : null;
+        if (motion) wave = new WallpaperWave(context, height, config.wallpaperDim, this::onWaveDrawn);
+        if (shown) {
+            int index = 0;
+            if (wave != null) root.addView(wave, index++, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            // No shade layer at all when the theme doesn't dim: a full-screen view is overdraw on 1 GB TVs.
-            if (config.wallpaperDim > 0) {
+            root.addView(image, index++, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            if (incoming != null) {
+                incoming.setVisibility(View.GONE);
+                root.addView(incoming, index++, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            if (wave != null) {
+                // The cover looks like a still frame of the wave: the same zoom, and the dim the wave draws itself.
+                image.setScaleX(WallpaperWave.ZOOM);
+                image.setScaleY(WallpaperWave.ZOOM);
+                if (config.wallpaperDim > 0) {
+                    image.setColorFilter((config.wallpaperDim * 255 / 100) << 24, PorterDuff.Mode.SRC_ATOP);
+                }
+            } else if (config.wallpaperDim > 0) {
+                // No shade layer at all when the theme doesn't dim: a full-screen view is overdraw on 1 GB TVs.
                 View shade = new View(context);
                 shade.setBackgroundColor((config.wallpaperDim * 255 / 100) << 24);
                 shade.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                root.addView(shade, 1, new FrameLayout.LayoutParams(
+                root.addView(shade, index, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             }
             showFirst();
+            if (wave != null && current == null) {
+                // Nothing could be decoded: the wave's surface would show black instead of the theme's colour.
+                root.removeView(wave);
+                wave = null;
+            }
         }
+    }
+
+    private static ImageView picture(Context context) {
+        ImageView view = new ImageView(context);
+        view.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return view;
     }
 
     /**
@@ -73,6 +128,10 @@ final class WallpaperPlayer {
             Bitmap bitmap = decode(first);
             if (bitmap != null) {
                 image.setImageBitmap(bitmap);
+                if (wave != null) {
+                    wave.show(bitmap);
+                    current = bitmap;
+                }
                 displayed = first.getName();
                 if (!displayed.equals(previous)) {
                     preferences.edit().putString("image", displayed)
@@ -87,28 +146,64 @@ final class WallpaperPlayer {
 
     void start() {
         active = true;
+        if (wave != null) {
+            // Each start builds a new GL context. Cleared by its first frame; still set when Home next starts, the
+            // wave took Home down, and it stays off.
+            settings.edit().putBoolean(Config.MOTION_PENDING_KEY, true).commit();
+            wave.reportNextFrame();   // the cover stays until the wave is on screen
+            wave.play();
+        }
         update();
     }
 
     void stop() {
         active = false;
+        root.removeCallbacks(tick);
+        if (fading != null) fading.end();   // Home is hidden: land on the new picture instead of fading unseen
+        if (wave != null) {
+            // Home can stay in sight while paused (a panel over it), and the wave's surface comes back black.
+            image.setImageBitmap(current);
+            image.setVisibility(View.VISIBLE);
+            wave.pause();
+            // The GL thread has stopped without taking Home down, even if it drew no frame.
+            settings.edit().remove(Config.MOTION_PENDING_KEY).apply();
+        }
     }
 
     void close() {
         active = false;
         closed = true;
+        root.removeCallbacks(tick);
+        if (fading != null) fading.end();
+        if (wave != null) wave.pause();
         decoder.shutdownNow();
     }
 
+    private void onWaveDrawn() {
+        settings.edit().remove(Config.MOTION_PENDING_KEY).apply();
+        if (!active) return;
+        image.setVisibility(View.GONE);
+        image.setImageDrawable(null);
+    }
+
     void update() {
+        // A decode in progress books the next tick itself.
         if (!active || closed || loading || files.isEmpty()) return;
+        // A fade the TV's animator scale stretched past the interval: finish it, or this tick is lost.
+        if (fading != null) fading.end();
+        root.removeCallbacks(tick);
         String previous = preferences.getString("image", "");
         File selected = WallpaperRotation.find(files, previous);
         long changed = preferences.getLong("changed", 0);
-        if (selected == null || WallpaperRotation.due(changed, System.currentTimeMillis(), interval)) {
+        // Stored as the change time below, so the next tick, one interval on, finds it due.
+        long now = System.currentTimeMillis();
+        if (selected == null || WallpaperRotation.due(changed, now, interval)) {
             selected = WallpaperRotation.pick(files, previous, random);
         }
-        if (selected == null || selected.getName().equals(displayed)) return;
+        if (selected == null || selected.getName().equals(displayed)) {
+            if (interval > 0) root.postDelayed(tick, WallpaperRotation.wait(changed, now, interval));
+            return;
+        }
         File next = selected;
         loading = true;
         decoder.execute(() -> {
@@ -125,14 +220,63 @@ final class WallpaperPlayer {
                     update();
                     return;
                 }
-                image.setImageBitmap(bitmap);
+                show(bitmap);
                 displayed = next.getName();
                 if (!displayed.equals(previous) || changed == 0) {
-                    preferences.edit().putString("image", displayed)
-                            .putLong("changed", System.currentTimeMillis()).apply();
+                    preferences.edit().putString("image", displayed).putLong("changed", now).apply();
                 }
+                if (interval > 0) root.postDelayed(tick, interval);
             });
         });
+    }
+
+    private void show(Bitmap bitmap) {
+        if (wave != null) {
+            if (fade == 0) {
+                wave.show(bitmap);
+                settle(bitmap);
+                return;
+            }
+            wave.fadeTo(bitmap);
+        } else if (incoming == null) {
+            image.setImageBitmap(bitmap);
+            return;
+        } else {
+            incoming.setImageBitmap(bitmap);
+            incoming.setAlpha(0f);
+            incoming.setVisibility(View.VISIBLE);
+        }
+        fading = ValueAnimator.ofFloat(0f, 1f);
+        fading.setDuration(fade);
+        fading.setInterpolator(new AccelerateDecelerateInterpolator());
+        fading.addUpdateListener(animation -> {
+            float alpha = WallpaperRotation.fadeAlpha(animation.getAnimatedFraction());
+            if (wave != null) wave.setMix(alpha);
+            else incoming.setAlpha(alpha);
+        });
+        fading.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                fading = null;
+                if (wave != null) {
+                    wave.commit();
+                    settle(bitmap);
+                    return;
+                }
+                // The bottom view takes the new picture and the top one goes away in the same frame, so nothing
+                // shows the change, and between fades only one full-screen picture is drawn.
+                image.setImageBitmap(bitmap);
+                incoming.setVisibility(View.GONE);
+                incoming.setImageDrawable(null);
+            }
+        });
+        fading.start();
+    }
+
+    /** The wave now shows {@code bitmap}; a cover in sight follows it. */
+    private void settle(Bitmap bitmap) {
+        current = bitmap;
+        if (image.getVisibility() == View.VISIBLE) image.setImageBitmap(bitmap);
     }
 
     private Bitmap decode(File file) {
