@@ -343,7 +343,7 @@
             </LinearLayout>
         </RelativeLayout>
 
-        <!-- The wrapper clips at the grid's edge; the grid itself must not clip so scaled tiles can overflow their cells. -->
+        <!-- The wrapper clips at the grid's edge; the grid itself must not clip so raised tiles' shadows can overflow their cells. -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
@@ -364,7 +364,7 @@
         </FrameLayout>
     </LinearLayout>
 
-    <!-- The single floating glass highlight that springs between tiles. -->
+    <!-- The single floating glass highlight that fades in on the focused tile. -->
     <com.gathin.tvhome.GlassView
         android:id="@+id/glass"
         android:layout_width="10dp"

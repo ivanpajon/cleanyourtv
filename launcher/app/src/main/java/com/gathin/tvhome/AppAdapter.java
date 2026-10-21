@@ -23,6 +23,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.ViewPropertyAnimator;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.ImageView;
@@ -94,8 +95,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static final float DESIGN_W_DP = 180f, DESIGN_H_DP = 101f;
 
     /**
-     * Tile width for a grid of this inner width: the cell minus room for the focus zoom and the glass
-     * highlight, capped at the design size so 4 columns on a 1080p TV look exactly as before.
+     * Tile width for a grid of this inner width: the cell minus room for the glass highlight and the raised
+     * tile's shadow (FOCUS_SCALE, sized for the focus zoom tiles used to have), capped at the design size so
+     * 4 columns on a 1080p TV look exactly as before.
      */
     static int tileWidthPx(int innerWidthPx, int columns, float density) {
         int design = Math.round(DESIGN_W_DP * density);
@@ -133,9 +135,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static final float DOCK_EXTRA_DP = 6 + 12;
     /** Room kept under the last row rows_below_dock asks for (MainActivity places the dock with the same). */
     static final float BOTTOM_ROOM_DP = 30;
+    /** rows_below_dock 0: more room under the dock, so it sits nearer the middle of the screen (MainActivity). */
+    static final float DOCK_LIFT_DP = 40;
     /** Room kept above the dock for the dock title (48sp hero name plus its 40dp gap) when dock_title is on. */
     static final float TITLE_ROOM_DP = 104;
-    /** dock_row false: room above the first row for its zoom and glass (MainActivity places the grid with it). */
+    /** dock_row false: room above the first row for its glass and shadow (MainActivity places the grid with it). */
     static final float TOP_ROOM_DP = 12;
 
     /**
@@ -400,10 +404,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         h.name.setVisibility(dockRow && position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
         h.name.setAlpha(focused ? 1f : 0f);
-        h.card.setScaleX(focused && animations ? focusScale() : 1f);
-        h.card.setScaleY(focused && animations ? focusScale() : 1f);
-        h.card.setTranslationY(focused && advancedEffects ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
+        h.card.setTranslationZ(focused && animations
+                ? raiseDp(advancedEffects) * ctx.getResources().getDisplayMetrics().density : 0f);
         h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
         h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
@@ -566,8 +568,21 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return e.banner != null ? e.banner : e.icon;
     }
 
-    float focusScale() {
-        return !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+    /** How far a focused tile rises towards the viewer (elevation, dp); advanced effects raise it higher. */
+    static float raiseDp(boolean advancedEffects) {
+        return advancedEffects ? 40 : 20;
+    }
+
+    /**
+     * The focus raise's timing, shared by a tile and the glass that fades in on it. The tile only rises in Z,
+     * with no zoom or slide, and its shadow stays centred under it because Theme.TvHome keeps only the ambient
+     * shadow, which spreads evenly, not the spot one, which falls away from the screen's centre.
+     */
+    static ViewPropertyAnimator focusTiming(ViewPropertyAnimator a, boolean focused, boolean advancedEffects,
+                                            boolean reducedMotion) {
+        if (reducedMotion) return a.setDuration(focused ? 120 : 80).setInterpolator(new DecelerateInterpolator());
+        return a.setDuration(advancedEffects ? (focused ? 220 : 170) : (focused ? 260 : 180))
+                .setInterpolator(new OvershootInterpolator(focused ? (advancedEffects ? 0.7f : 1.6f) : 0f));
     }
 
     /** A vivid colour sampled from the app's banner (or icon), cached per entry; a card's accent when it set one. */
@@ -675,36 +690,21 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 view.animate().cancel();
                 banner.animate().cancel();
                 name.animate().cancel();
-                float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
-                float s = focused ? scale : 1f;
+                float z = focused ? raiseDp(advancedEffects) * density : 0f;
                 if (!animations) {
-                    view.setScaleX(1f);
-                    view.setScaleY(1f);
-                    view.setTranslationY(0f);
-                    view.setTranslationZ(0f);
                     banner.setScaleX(1f);
                     banner.setScaleY(1f);
                     name.setAlpha(focused ? 1f : 0f);
                     name.setTranslationY(0f);
                 } else if (reducedMotion) {
-                    view.animate().scaleX(s).scaleY(s)
-                            .translationY(focused && advancedEffects ? -4f * density : 0f)
-                            .translationZ(focused && advancedEffects ? 8f * density : 0f)
-                            .setDuration(focused ? 120 : 80)
-                            .setInterpolator(new DecelerateInterpolator())
-                            .withLayer().start();
+                    focusTiming(view.animate().translationZ(z), focused, advancedEffects, true).start();
                     name.animate().alpha(focused ? 1f : 0f).setDuration(100).start();
                     // Same place as the full motion's slide ends: the layout's -6dp is only its starting point, and
-                    // left there the name overlaps the zoomed tile.
+                    // left there the name sits against the tile.
                     // Only on focus: snapping it back to -6dp while it fades out would jump it up over the tile.
                     if (focused) name.setTranslationY(density * 4f);
                 } else {
-                    view.animate().scaleX(s).scaleY(s)
-                            .translationY(focused && advancedEffects ? -4f * density : 0f)
-                            .translationZ(focused && advancedEffects ? 8f * density : 0f)
-                            .setDuration(advancedEffects ? (focused ? 220 : 170) : (focused ? 260 : 180))
-                            .setInterpolator(new OvershootInterpolator(focused ? (advancedEffects ? 0.7f : 1.6f) : 0f))
-                            .withLayer().start();
+                    focusTiming(view.animate().translationZ(z), focused, advancedEffects, false).start();
                     if (advancedEffects) {
                         banner.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
                                 .setDuration(280).start();

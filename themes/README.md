@@ -44,10 +44,10 @@ is ignored, and a file that doesn't parse is ignored as a whole, so a theme can 
 | `shamsi_date` | bool | Show the Solar Hijri date above the Gregorian one |
 | `greeting_name` | string | A name after the greeting, e.g. `"Mr. Trịnh"` for GOOD MORNING, MR. TRỊNH; empty for the greeting alone |
 | `module_cards` | bool | Look for module cards and ask about them (`true`); `false` turns the feature off |
-| `reduced_motion` | bool | Calmer motion for weak GPUs: stiff highlight spring, no tile overshoot, short fades, no entrance replay |
+| `reduced_motion` | bool | Calmer motion for weak GPUs: no tile overshoot, short fades, no entrance replay |
 | `vpn_app` | string | App the network pill opens when a VPN is configured; also shows a red "VPN off" badge while no VPN is up |
 | `animations` | bool | Basic focus, glass, title and tile entrance motion; true by default |
-| `advanced_effects` | bool | Optional lifted tile, icon zoom, smooth ambient colour and app opening effects; false by default |
+| `advanced_effects` | bool | Optional higher tile raise (a bigger shadow), icon zoom, smooth ambient colour and app opening effects; false by default |
 | `show_home_settings_shortcut` | bool | Keep the optional Default-home tile visible when the TV has a home picker; false by default |
 | `show_stats` | bool | One line under the clock with CPU, free memory and free storage. Off unless set |
 | `background_color` | `#RRGGBB` | Colour behind everything; black by default |
@@ -110,8 +110,8 @@ or push a theme again.
 
 ## Reduced motion
 
-`"reduced_motion": true` keeps the look but calms the movement: the highlight spring is stiff instead
-of bouncing, tiles zoom without overshoot, fades are shorter, and Home does not replay the tile
+`"reduced_motion": true` keeps the look but calms the movement: tiles rise without overshoot,
+fades are shorter, and Home does not replay the tile
 entrance when you come back to it. Use it on TVs whose GPU cannot keep up; a MediaTek MT5895 on
 Android 10 is the known case. The default, `false`, keeps the normal motion.
 

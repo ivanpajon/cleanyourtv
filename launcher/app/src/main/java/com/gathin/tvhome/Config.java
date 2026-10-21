@@ -69,7 +69,7 @@ final class Config {
     /** Name after the greeting ("Good morning, Mr. Trịnh"); empty for the greeting alone. */
     final String greetingName;
     final boolean moduleCards;
-    /** Calmer motion for weak GPUs (config.xml, reduced_motion): stiff spring, short fades, no replay. */
+    /** Calmer motion for weak GPUs (config.xml, reduced_motion): no overshoot, short fades, no replay. */
     final boolean reducedMotion;
     /** The focused dock app's name in large type above the dock (config.xml, dock_title). */
     final boolean dockTitle;

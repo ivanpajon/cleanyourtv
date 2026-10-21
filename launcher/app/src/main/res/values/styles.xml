@@ -4,6 +4,10 @@
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:colorBackground">@android:color/black</item>
         <item name="android:windowAnimationStyle">@null</item>
+        <!-- Shadows centred under what casts them: no spot shadow, which falls away from the screen's centre (a
+             raised tile on the left looked pushed left), and a stronger ambient one, which spreads evenly. -->
+        <item name="android:spotShadowAlpha">0</item>
+        <item name="android:ambientShadowAlpha">0.8</item>
     </style>
 
     <!-- Frosted pill, tvOS style. -->

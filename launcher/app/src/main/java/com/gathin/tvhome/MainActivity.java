@@ -54,6 +54,7 @@ import android.view.SoundEffectConstants;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.animation.AnimationUtils;
+import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LayoutAnimationController;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -63,10 +64,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.dynamicanimation.animation.DynamicAnimation;
-import androidx.dynamicanimation.animation.FloatPropertyCompat;
-import androidx.dynamicanimation.animation.SpringAnimation;
-import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -84,7 +81,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
+ * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that fades in on the raised, focused tile.
  */
 public class MainActivity extends Activity implements AppAdapter.TileListener {
 
@@ -150,12 +147,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Optional time-of-day backdrop (config.xml, sky_intensity); 0 keeps it hidden. */
     private SkyView sky;
     private String vpnApp;
-    private SpringAnimation springX, springY;
-    private float glassTargetX, glassTargetY;
-    // How far the grid has scrolled the glass. springY works without it, in grid content space, so a
-    // scroll moves the glass in lockstep with its tile instead of becoming a moving spring target.
-    private float glassScrollShift;
     private int glassCardW;   // width of the tile the glass was last fitted to
+    private long glassMovedAt;   // uptime of the glass's last move between tiles
+    private int glassPos = -1;   // adapter position of the tile the glass is on
     private boolean glassShown;
     private final Rect tileRect = new Rect();
     private final Rect revealRect = new Rect();
@@ -170,7 +164,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** config settings_key_keycodes / settings_key_panel, so the Settings button works on Home without HomeKeyService. */
     private int[] settingsKeycodes = new int[0];
     private boolean settingsKeyPanel;
-    /** Calmer motion for weak GPUs (config.xml, reduced_motion): stiff spring, short fades, no replay. */
+    /** Calmer motion for weak GPUs (config.xml, reduced_motion): no overshoot, short fades, no replay. */
     private boolean reducedMotion;
     /** config.xml dock_row: the first row is a separate dock (band, parked low, top shelf) rather than plain grid. */
     private boolean dockRow;
@@ -313,6 +307,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         sky = findViewById(R.id.sky);
         sky.setIntensity(cfg.skyIntensity);
         glass = findViewById(R.id.glass);
+        glass.showHalo();
         if (festive) glass.setAccent(festival.accentColor());
         ambient = findViewById(R.id.ambient);
         // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
@@ -439,10 +434,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // even when the theme requests an extra visible row below the dock.
             int shelfClearance = cfg.appLibrary ? hero.getMeasuredHeight() + (int) (40 * density) : 0;
             int want = Math.max(shelfClearance, h - dockRow - gridRows - (int) (AppAdapter.BOTTOM_ROOM_DP * density));
+            // Only the dock: lift it towards the middle of the screen, but only as far as its title (the cinematic
+            // shelf included) still clears the header.
+            if (rowsBelowDock == 0) {
+                int keep = Math.max(shelfClearance, cfg.dockTitle ? hero.getMeasuredHeight() + (int) (40 * density) : 0);
+                want = Math.max(want - (int) (AppAdapter.DOCK_LIFT_DP * density), Math.min(want, keep));
+            }
             // Where the rows cannot fit even at the smallest tile (3 rows with the title on), the title keeps its
             // room above the dock and the last rows run off the bottom instead of the title drawing over the clock.
             if (MainActivity.this.dockRow && cfg.dockTitle && rowsBelowDock > 0) want = Math.max(want, (int) (AppAdapter.TITLE_ROOM_DP * density));
-            // No dock to push down: the grid starts at the top, with room for the first row's zoom and glass.
+            // No dock to push down: the grid starts at the top, with room for the first row's glass and shadow.
             if (!MainActivity.this.dockRow) want = (int) (AppAdapter.TOP_ROOM_DP * density);
             if (grid.getPaddingTop() != want) {
                 grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
@@ -457,36 +458,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
                 if (!glassShown) return;
-                glassTargetY -= dy;
-                glassScrollShift -= dy;
                 glass.setTranslationY(glass.getTranslationY() - dy);
             }
         });
-
-        // Liquid feel: soft springs on the highlight's position.
-        springX = new SpringAnimation(glass, DynamicAnimation.TRANSLATION_X);
-        springY = new SpringAnimation(glass, new FloatPropertyCompat<View>("glassContentY") {
-            @Override
-            public float getValue(View v) {
-                return v.getTranslationY() - glassScrollShift;
-            }
-
-            @Override
-            public void setValue(View v, float value) {
-                v.setTranslationY(value + glassScrollShift);
-            }
-        });
-        for (SpringAnimation s : new SpringAnimation[]{springX, springY}) {
-            if (reducedMotion) {
-                // Stiff and almost critically damped: settles in a few frames instead of oscillating,
-                // and stops once the highlight is within 1.5 px of its tile.
-                s.setSpring(new SpringForce().setStiffness(1400f).setDampingRatio(0.95f));
-                s.setMinimumVisibleChange(1.5f);
-            } else {
-                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 320f : 260f)
-                        .setDampingRatio(advancedEffects ? 0.76f : 0.58f));
-            }
-        }
 
         btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
@@ -648,6 +622,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         final boolean restoreFocus = appLibrary == null && (animate || grid.hasFocus());
         if (restoreFocus) {
             glassShown = false;
+            glass.animate().cancel();   // a focus fade-in would bring it back over the old tile
             glass.setAlpha(0f);
             heroShown = false;
             hero.setAlpha(0f);
@@ -1077,58 +1052,58 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             });
             return;
         }
-        // Tile rect in root coordinates, using layout positions (ignores the scale animation).
+        // Tile rect in root coordinates, using layout positions (ignores the raise).
         Rect r = tileRect;
         r.set(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
-        float pad = 6f * density;        // matches GlassView's glow inset
-        float scale = adapter.focusScale();
-        float w = card.getWidth() * scale + 2 * pad;
-        float h = card.getHeight() * scale + 2 * pad;
+        float pad = GlassView.HALO_DP * density;   // GlassView's room for the glow and the halo
+        float w = card.getWidth() + 2 * pad;
+        float h = card.getHeight() + 2 * pad;
         float x = r.exactCenterX() - w / 2f;
-        float y = r.exactCenterY() - h / 2f - (advancedEffects ? 4f * density : 0f);
+        float y = r.exactCenterY() - h / 2f;
 
         ViewGroup.LayoutParams lp = glass.getLayoutParams();
         if (lp.width != (int) w || lp.height != (int) h || card.getWidth() != glassCardW) {
             lp.width = (int) w;
             lp.height = (int) h;
             glass.setLayoutParams(lp);
-            // GlassView draws its slab inset by pad, i.e. exactly over the zoomed tile: same corners as the tile.
-            glass.setRadius(AppAdapter.cornerRadius(card.getWidth(), density) * scale);
+            // GlassView draws its slab inset by pad, i.e. exactly over the tile: same corners as the tile.
+            glass.setRadius(AppAdapter.cornerRadius(card.getWidth(), density));
         }
         glassCardW = card.getWidth();
-        glassTargetX = x;
-        glassTargetY = y;
         // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid.
         int accent = cinematic && !festive && position < COLUMNS ? adapter.ambientColorAt(position) : 0;
         if (cinematic && !festive && accent != glassAccent) {
             glassAccent = accent;
             glass.setAccent(accent);
         }
+        // The glass fades in on the new tile as it rises instead of sliding over from the last one, so nothing
+        // travels sideways.
+        glass.setTranslationX(x);
+        glass.setTranslationY(y);
         if (!glassShown) {
-            springX.cancel();
-            springY.cancel();
-            glass.setTranslationX(x);
-            glass.setTranslationY(y);
             if (animations) glass.animate().alpha(1f).setDuration(reducedMotion ? 100 : 180).start();
             else glass.setAlpha(1f);
             glassShown = true;
-        } else if (!animations) {
-            springX.cancel();
-            springY.cancel();
-            glass.setTranslationX(x);
-            glass.setTranslationY(y);
-        } else {
-            springX.animateToFinalPosition(x);
-            springY.animateToFinalPosition(y - glassScrollShift);
+        } else if (animations) {
+            // A held key moves focus every 50 to 100 ms: keep fading in from where the glass is instead of
+            // starting again from 0 on every step, which strobed it.
+            long now = SystemClock.uptimeMillis();
+            // A refit on the same tile only resizes the glass, so it doesn't blink either.
+            if (position != glassPos && now - glassMovedAt > 300) glass.setAlpha(0f);
+            glassMovedAt = now;
+            // The raise's duration, but no overshoot: alpha can't go past 1.
+            AppAdapter.focusTiming(glass.animate().alpha(1f), true, advancedEffects, reducedMotion)
+                    .setInterpolator(new DecelerateInterpolator()).start();
         }
+        glassPos = position;
         View item = (View) card.getParent();
         if (dockRow && position < COLUMNS) {
             // Dock: park it at the bottom of the screen and show the top shelf for this app.
             int decoratedTop = item.getTop() - (int) (6 * density);
             int dy = decoratedTop - grid.getPaddingTop();
             // A 1px mismatch used to start a scroll on every dock move. Only scroll when the row is
-            // actually off; reduced motion does it in one jump so it does not fight the highlight.
+            // actually off; reduced motion does it in one jump instead of a smooth scroll the GPU repaints every frame.
             boolean scroll = Math.abs(dy) > (int) (8 * density);
             if (scroll) {
                 if (!animations || reducedMotion) grid.scrollBy(0, dy);
@@ -1139,8 +1114,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // Below the dock (or in a plain grid) the glow follows the tile without the big name; letting it
             // fade out left the grid on plain black.
             showGlowOnly(position);
-            // Scroll just enough so the whole glass (not only the tile) is visible.
-            revealRect.set(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
+            // Scroll just enough so the tile and its glow are visible; the wide halo may run off the screen.
+            revealRect.set(0, -(int) (12 * density), item.getWidth(), item.getHeight() + (int) (6 * density));
             grid.requestChildRectangleOnScreen(item, revealRect, reducedMotion);
         }
     }
@@ -1152,10 +1127,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
         View card = vh == null ? null : vh.itemView.findViewById(R.id.card);
         if (card == null || card.getWidth() <= 0 || !card.isFocused()) return;
-        float pad = 6f * density;
-        float scale = adapter.focusScale();
-        int w = (int) (card.getWidth() * scale + 2 * pad);
-        int h = (int) (card.getHeight() * scale + 2 * pad);
+        float pad = GlassView.HALO_DP * density;
+        int w = (int) (card.getWidth() + 2 * pad);
+        int h = (int) (card.getHeight() + 2 * pad);
         if (!glassShown || card.getWidth() != glassCardW || glass.getWidth() != w || glass.getHeight() != h) {
             onTileFocused(pos, card);
         }
