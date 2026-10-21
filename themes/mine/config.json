@@ -1,0 +1,8 @@
+{
+  "background_color": "#070A14",
+  "wallpaper": true,
+  "wallpaper_rotation_seconds": 15,
+  "wallpaper_fade_seconds": 4,
+  "wallpaper_motion": true,
+  "advanced_effects": true
+}
