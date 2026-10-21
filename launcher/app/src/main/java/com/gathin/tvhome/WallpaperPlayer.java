@@ -26,11 +26,11 @@ import java.util.concurrent.Executors;
 /** Displays and rotates a theme's local wallpaper images while Home is visible. */
 final class WallpaperPlayer {
     private final FrameLayout root;
-    /** The picture; with wallpaper_motion, the still cover over the wave while that has no frame on screen. */
+    /** The picture; with a wallpaper motion, the still cover over the wave while that has no frame on screen. */
     private final ImageView image;
     /** The next picture, faded in over {@link #image}; null when the theme cuts instead of fading. */
     private final ImageView incoming;
-    /** The moving wallpaper (wallpaper_motion), under {@link #image}; null for still pictures. */
+    /** The moving wallpaper (wallpaper_motion_wave), under {@link #image}; null for still pictures. */
     private WallpaperWave wave;
     private final List<File> files;
     private final long interval;
@@ -48,6 +48,12 @@ final class WallpaperPlayer {
     private String displayed = "";
     /** The picture the wave shows, for the cover to take over while Home is paused. */
     private Bitmap current;
+    /** The picture a wave crossfade is heading to, until it shows alone. */
+    private Bitmap fadingTo;
+    /** The rotation's last picture and change time, saved when Home pauses rather than at every change. */
+    private String imageName;
+    private long changedAt;
+    private boolean unsaved;
     /** The rotation keeps its own time, so intervals shorter than Home's minute tick work. */
     private final Runnable tick = this::update;
 
@@ -59,9 +65,11 @@ final class WallpaperPlayer {
         fade = config.animations && !config.reducedMotion
                 ? Math.min(config.wallpaperFadeSeconds * 1000L, interval - 1000) : 0;
         preferences = context.getSharedPreferences("wallpaper_rotation", Context.MODE_PRIVATE);
+        imageName = preferences.getString("image", "");
+        changedAt = preferences.getLong("changed", 0);
         settings = context.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE);
         boolean shown = config.wallpaperEnabled && !files.isEmpty();
-        boolean motion = shown && config.wallpaperMotion && config.animations && !config.reducedMotion
+        boolean motion = shown && config.wallpaperWave && config.animations && !config.reducedMotion
                 && ValueAnimator.areAnimatorsEnabled();
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
         // The wave renders small and the display scales it up: its pictures need no more pixels than that.
@@ -72,7 +80,10 @@ final class WallpaperPlayer {
         // A second full-screen view only for a fading rotation: it is overdraw on 1 GB TVs, and stays GONE between fades.
         boolean fades = shown && !motion && fade > 0 && files.size() > 1;
         incoming = fades ? picture(context) : null;
-        if (motion) wave = new WallpaperWave(context, height, config.wallpaperDim, this::onWaveDrawn);
+        if (motion) {
+            wave = new WallpaperWave(context, height, config.wallpaperDim, config.wallpaperWaveStrength,
+                    config.wallpaperWaveSpeed, this::onWaveDrawn);
+        }
         if (shown) {
             int index = 0;
             if (wave != null) root.addView(wave, index++, new FrameLayout.LayoutParams(
@@ -86,8 +97,8 @@ final class WallpaperPlayer {
             }
             if (wave != null) {
                 // The cover looks like a still frame of the wave: the same zoom, and the dim the wave draws itself.
-                image.setScaleX(WallpaperWave.ZOOM);
-                image.setScaleY(WallpaperWave.ZOOM);
+                image.setScaleX(wave.zoom);
+                image.setScaleY(wave.zoom);
                 if (config.wallpaperDim > 0) {
                     image.setColorFilter((config.wallpaperDim * 255 / 100) << 24, PorterDuff.Mode.SRC_ATOP);
                 }
@@ -121,7 +132,7 @@ final class WallpaperPlayer {
      * Only the later changes of a rotation decode in the background.
      */
     private void showFirst() {
-        String previous = preferences.getString("image", "");
+        String previous = imageName;
         File first = WallpaperRotation.find(files, previous);
         if (first == null) first = WallpaperRotation.pick(files, previous, random);
         while (first != null) {
@@ -134,8 +145,10 @@ final class WallpaperPlayer {
                 }
                 displayed = first.getName();
                 if (!displayed.equals(previous)) {
-                    preferences.edit().putString("image", displayed)
-                            .putLong("changed", System.currentTimeMillis()).apply();
+                    imageName = displayed;
+                    changedAt = System.currentTimeMillis();
+                    unsaved = true;
+                    save();
                 }
                 return;
             }
@@ -159,7 +172,8 @@ final class WallpaperPlayer {
     void stop() {
         active = false;
         root.removeCallbacks(tick);
-        if (fading != null) fading.end();   // Home is hidden: land on the new picture instead of fading unseen
+        finishFade();   // Home is hidden: land on the new picture instead of fading unseen
+        save();
         if (wave != null) {
             // Home can stay in sight while paused (a panel over it), and the wave's surface comes back black.
             image.setImageBitmap(current);
@@ -174,7 +188,8 @@ final class WallpaperPlayer {
         active = false;
         closed = true;
         root.removeCallbacks(tick);
-        if (fading != null) fading.end();
+        finishFade();
+        save();
         if (wave != null) wave.pause();
         decoder.shutdownNow();
     }
@@ -190,11 +205,11 @@ final class WallpaperPlayer {
         // A decode in progress books the next tick itself.
         if (!active || closed || loading || files.isEmpty()) return;
         // A fade the TV's animator scale stretched past the interval: finish it, or this tick is lost.
-        if (fading != null) fading.end();
+        finishFade();
         root.removeCallbacks(tick);
-        String previous = preferences.getString("image", "");
+        String previous = imageName;
         File selected = WallpaperRotation.find(files, previous);
-        long changed = preferences.getLong("changed", 0);
+        long changed = changedAt;
         // Stored as the change time below, so the next tick, one interval on, finds it due.
         long now = System.currentTimeMillis();
         if (selected == null || WallpaperRotation.due(changed, now, interval)) {
@@ -223,7 +238,10 @@ final class WallpaperPlayer {
                 show(bitmap);
                 displayed = next.getName();
                 if (!displayed.equals(previous) || changed == 0) {
-                    preferences.edit().putString("image", displayed).putLong("changed", now).apply();
+                    // Saved when Home pauses: no flash write every rotation.
+                    imageName = displayed;
+                    changedAt = now;
+                    unsaved = true;
                 }
                 if (interval > 0) root.postDelayed(tick, interval);
             });
@@ -235,34 +253,29 @@ final class WallpaperPlayer {
             if (fade == 0) {
                 wave.show(bitmap);
                 settle(bitmap);
-                return;
+            } else {
+                // The wave times the crossfade on its own frames: no animator wakes the main thread every vsync.
+                fadingTo = bitmap;
+                wave.fadeTo(bitmap, fade, () -> landFade(bitmap));
             }
-            wave.fadeTo(bitmap);
-        } else if (incoming == null) {
+            return;
+        }
+        if (incoming == null) {
             image.setImageBitmap(bitmap);
             return;
-        } else {
-            incoming.setImageBitmap(bitmap);
-            incoming.setAlpha(0f);
-            incoming.setVisibility(View.VISIBLE);
         }
+        incoming.setImageBitmap(bitmap);
+        incoming.setAlpha(0f);
+        incoming.setVisibility(View.VISIBLE);
         fading = ValueAnimator.ofFloat(0f, 1f);
         fading.setDuration(fade);
         fading.setInterpolator(new AccelerateDecelerateInterpolator());
-        fading.addUpdateListener(animation -> {
-            float alpha = WallpaperRotation.fadeAlpha(animation.getAnimatedFraction());
-            if (wave != null) wave.setMix(alpha);
-            else incoming.setAlpha(alpha);
-        });
+        fading.addUpdateListener(animation ->
+                incoming.setAlpha(WallpaperRotation.fadeAlpha(animation.getAnimatedFraction())));
         fading.addListener(new AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(Animator animation) {
                 fading = null;
-                if (wave != null) {
-                    wave.commit();
-                    settle(bitmap);
-                    return;
-                }
                 // The bottom view takes the new picture and the top one goes away in the same frame, so nothing
                 // shows the change, and between fades only one full-screen picture is drawn.
                 image.setImageBitmap(bitmap);
@@ -271,6 +284,28 @@ final class WallpaperPlayer {
             }
         });
         fading.start();
+    }
+
+    /** Lands a crossfade in progress on its new picture now. */
+    private void finishFade() {
+        if (fading != null) fading.end();
+        if (fadingTo != null) {
+            wave.finishFade();
+            landFade(fadingTo);
+        }
+    }
+
+    /** The wave's crossfade to {@code bitmap} is over, by itself or by finishFade, whichever comes first. */
+    private void landFade(Bitmap bitmap) {
+        if (fadingTo != bitmap) return;
+        fadingTo = null;
+        settle(bitmap);
+    }
+
+    private void save() {
+        if (!unsaved) return;
+        unsaved = false;
+        preferences.edit().putString("image", imageName).putLong("changed", changedAt).apply();
     }
 
     /** The wave now shows {@code bitmap}; a cover in sight follows it. */

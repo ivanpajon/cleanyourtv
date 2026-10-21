@@ -38,6 +38,11 @@ final class Config {
     static final String WALLPAPER_CHOICE_KEY = "wallpaper_choice";
     /** Set from each start of the wallpaper motion until its first frame; still set at Home's next launch, it crashed. */
     static final String MOTION_PENDING_KEY = "wallpaper_motion_pending";
+    /** On-TV choices for a theme's wave, under the theme's own key names. */
+    static final String WAVE_KEY = "wallpaper_motion_wave";
+    static final String WAVE_STRENGTH_KEY = "wallpaper_motion_wave_strength";
+    static final String WAVE_SPEED_KEY = "wallpaper_motion_wave_speed";
+    static final int MIN_WAVE_STRENGTH = 1, MAX_WAVE_STRENGTH = 66, MIN_WAVE_SPEED = 25, MAX_WAVE_SPEED = 300;
     private static final String THEME_REVISION_NAME = "theme_revision";
     private static final String THEME_SIGNATURE_KEY = "theme_signature";
 
@@ -100,8 +105,18 @@ final class Config {
     final int wallpaperRotationSeconds;
     /** Crossfade between rotating images, in seconds (config.json, wallpaper_fade_seconds); 0 cuts. */
     final int wallpaperFadeSeconds;
-    /** A slow wave over the wallpaper (config.json, wallpaper_motion); off after it failed until the next theme push. */
-    final boolean wallpaperMotion;
+    /** A slow wave over the wallpaper (config.json, wallpaper_motion_wave); off after it failed until the next theme push. */
+    final boolean wallpaperWave;
+    /** How far the wave moves the picture, in pixels of a 1080p screen (wallpaper_motion_wave_strength). */
+    final int wallpaperWaveStrength;
+    /** The wave's pace in percent of the default (wallpaper_motion_wave_speed). */
+    final int wallpaperWaveSpeed;
+    /** The theme's name (config.json, name); null without a theme, empty when the theme has none. */
+    final String themeName;
+    /** Whether the theme sets wallpaper_motion_wave, so Launcher settings offers the wave's controls. */
+    final boolean themeHasWave;
+    /** Whether Launcher settings may pick a single picture (config.json, wallpaper_picker; true by default). */
+    final boolean wallpaperPicker;
     final int wallpaperDim;
     /** Whether the overlay file was present and parsed. */
     final boolean overlayApplied;
@@ -119,7 +134,9 @@ final class Config {
                    boolean shamsiDate, String greetingName, boolean moduleCards, boolean reducedMotion, boolean dockTitle, boolean dockRow, boolean reorderButton, String vpnApp,
                    boolean showHomeSettingsShortcut, boolean showStats, boolean appLibrary, int backgroundColor, int skyIntensity,
                    int[] settingsKeycodes, boolean settingsKeyPanel, boolean wallpaperEnabled, File wallpaper, List<File> wallpapers,
-                   int wallpaperRotationSeconds, int wallpaperFadeSeconds, boolean wallpaperMotion, int wallpaperDim,
+                   int wallpaperRotationSeconds, int wallpaperFadeSeconds, boolean wallpaperWave,
+                   int wallpaperWaveStrength, int wallpaperWaveSpeed, String themeName, boolean themeHasWave,
+                   boolean wallpaperPicker, int wallpaperDim,
                    boolean overlayApplied,
                    Festival festival, int[] inputKeycodes, List<String> appKeys,
                    List<RaceWeekend.Race> raceCalendar, boolean cinematicHome) {
@@ -160,7 +177,12 @@ final class Config {
         this.wallpapers = Collections.unmodifiableList(wallpapers);
         this.wallpaperRotationSeconds = wallpaperRotationSeconds;
         this.wallpaperFadeSeconds = wallpaperFadeSeconds;
-        this.wallpaperMotion = wallpaperMotion;
+        this.wallpaperWave = wallpaperWave;
+        this.wallpaperWaveStrength = wallpaperWaveStrength;
+        this.wallpaperWaveSpeed = wallpaperWaveSpeed;
+        this.themeName = themeName;
+        this.themeHasWave = themeHasWave;
+        this.wallpaperPicker = wallpaperPicker;
         this.wallpaperDim = wallpaperDim;
         this.overlayApplied = overlayApplied;
         this.festival = festival;
@@ -268,8 +290,24 @@ final class Config {
         // Seconds win over minutes when both are set; below 5 s a change would barely be seen before the next.
         int rotationSeconds = json == null ? 0 : integer(json, "wallpaper_rotation_seconds", rotationMinutes * 60, 5, 86400);
         int fadeSeconds = json == null ? 0 : integer(json, "wallpaper_fade_seconds", 0, 0, 120);
-        boolean motion = json != null && bool(json, "wallpaper_motion", false)
-                && !choices.getBoolean(MOTION_PENDING_KEY, false);
+        String themeName = json == null ? null : string(json, "name", "");
+        boolean wallpaperPicker = json == null || bool(json, "wallpaper_picker", true);
+        // Motions are named wallpaper_motion_<name>, each with its own settings; the wave is the only one so far.
+        boolean themeHasWave = json != null && json.has(WAVE_KEY);
+        boolean wave = themeHasWave && bool(json, WAVE_KEY, false);
+        int waveStrength = json == null ? WallpaperWave.DEFAULT_STRENGTH : integer(json, WAVE_STRENGTH_KEY,
+                WallpaperWave.DEFAULT_STRENGTH, MIN_WAVE_STRENGTH, MAX_WAVE_STRENGTH);
+        int waveSpeed = json == null ? WallpaperWave.DEFAULT_SPEED : integer(json, WAVE_SPEED_KEY,
+                WallpaperWave.DEFAULT_SPEED, MIN_WAVE_SPEED, MAX_WAVE_SPEED);
+        if (themeHasWave) {
+            // Launcher settings' theme section can change the wave a theme sets up, never add one.
+            wave = choices.getBoolean(WAVE_KEY, wave);
+            int strength = choices.getInt(WAVE_STRENGTH_KEY, waveStrength);
+            if (strength >= MIN_WAVE_STRENGTH && strength <= MAX_WAVE_STRENGTH) waveStrength = strength;
+            int speed = choices.getInt(WAVE_SPEED_KEY, waveSpeed);
+            if (speed >= MIN_WAVE_SPEED && speed <= MAX_WAVE_SPEED) waveSpeed = speed;
+        }
+        wave = wave && !choices.getBoolean(MOTION_PENDING_KEY, false);
         int wallpaperDim = json == null ? 0 : integer(json, "wallpaper_dim", 0, 0, 90);
         List<File> wallpapers = new ArrayList<>();
         if (rotationSeconds > 0 && dir != null && wallpaperEnabled) {
@@ -278,7 +316,7 @@ final class Config {
         if (wallpapers.isEmpty() && wallpaper != null) wallpapers.add(wallpaper);
         // An on-TV wallpaper pick overrides the theme: a filename from the wallpapers/
         // collection, or "none". Unset means the theme decides (off by default).
-        String wallpaperChoice = choices.getString(WALLPAPER_CHOICE_KEY, null);
+        String wallpaperChoice = wallpaperPicker ? choices.getString(WALLPAPER_CHOICE_KEY, null) : null;
         if ("none".equals(wallpaperChoice)) {
             wallpapers.clear();
             wallpaper = null;
@@ -305,7 +343,8 @@ final class Config {
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, greetingName, moduleCards, reducedMotion, dockTitle, dockRow, reorderButton, vpn, homeSettings, showStats, library, background,
                 Math.max(0, Math.min(100, skyIntensity)), settingsKeycodes, settingsKeyPanel, wallpaperEnabled, wallpaper,
-                wallpapers, rotationSeconds, fadeSeconds, motion, wallpaperDim, applied,
+                wallpapers, rotationSeconds, fadeSeconds, wave, waveStrength, waveSpeed, themeName, themeHasWave,
+                wallpaperPicker, wallpaperDim, applied,
                 festival, inputKeycodes, appKeys, json == null ? Collections.emptyList() : raceCalendar(json), cinematic);
     }
 
@@ -350,11 +389,12 @@ final class Config {
             SharedPreferences.Editor editor = choices.edit();
             if (!"absent".equals(token)) editor.remove("columns").remove("animations")
                     .remove("advanced_effects").remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY)
-                    .remove(MOTION_PENDING_KEY);
+                    .remove(MOTION_PENDING_KEY).remove(WAVE_KEY).remove(WAVE_STRENGTH_KEY).remove(WAVE_SPEED_KEY);
             editor.putString(THEME_SIGNATURE_KEY, signature).commit();
         } else if (!seen.equals(signature)) {
             choices.edit().remove("columns").remove("animations").remove("advanced_effects")
                     .remove(ROWS_BELOW_DOCK_KEY).remove(WALLPAPER_CHOICE_KEY).remove(MOTION_PENDING_KEY)
+                    .remove(WAVE_KEY).remove(WAVE_STRENGTH_KEY).remove(WAVE_SPEED_KEY)
                     .putString(THEME_SIGNATURE_KEY, signature).commit();
         }
     }

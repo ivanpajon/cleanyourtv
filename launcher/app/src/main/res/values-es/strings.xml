@@ -25,6 +25,14 @@
     <string name="dream_name">Reloj</string>
     <string name="launcher_settings">Ajustes del lanzador</string>
     <string name="columns_label">Aplicaciones por fila</string>
+    <string name="theme_label">Tema</string>
+    <string name="theme_state">Tema: %1$s</string>
+    <string name="theme_builtin">Integrado</string>
+    <string name="theme_custom">Personalizado</string>
+    <string name="theme_settings_title">Ajustes de %1$s</string>
+    <string name="wave_state">Movimiento de onda: %1$s</string>
+    <string name="wave_strength_label">Intensidad de la onda (px)</string>
+    <string name="wave_speed_label">Velocidad de la onda</string>
     <string name="animations_state">Animaciones: %1$s</string>
     <string name="advanced_effects">Efectos avanzados</string>
     <string name="advanced_effects_state">Efectos avanzados: %1$s</string>

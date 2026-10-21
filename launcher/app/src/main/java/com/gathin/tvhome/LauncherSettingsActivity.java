@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -19,14 +20,25 @@ public final class LauncherSettingsActivity extends Activity {
     private SharedPreferences choices;
     private final TextView[] columnChoices = new TextView[4];
     private final TextView[] rowChoices = new TextView[4];
+    private static final int[] STRENGTHS = {30, 42, 54, 66};
+    private static final int[] SPEEDS = {50, 100, 150, 200};
+    private final TextView[] strengthChoices = new TextView[4];
+    private final TextView[] speedChoices = new TextView[4];
+    private TextView themeChoice;
+    private TextView waveChoice;
     private TextView wallpaperChoice;
     private TextView animationsChoice;
     private TextView advancedChoice;
     private TextView followThemeChoice;
+    private String themeDisplayName;
+    private boolean themeHasWave;
     private int columns;
     private int rowsBelowDock;
     private boolean animations;
     private boolean advancedEffects;
+    private boolean wave;
+    private int waveStrength;
+    private int waveSpeed;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -38,6 +50,10 @@ public final class LauncherSettingsActivity extends Activity {
         rowsBelowDock = config.rowsBelowDock;
         animations = config.animations;
         advancedEffects = config.animations && config.advancedEffects;
+        loadWave(config);
+        themeHasWave = config.themeHasWave;
+        themeDisplayName = config.themeName == null ? getString(R.string.theme_builtin)
+                : config.themeName.isEmpty() ? getString(R.string.theme_custom) : config.themeName;
 
         int[] ids = {R.id.columns4, R.id.columns5, R.id.columns6, R.id.columns7};
         for (int i = 0; i < ids.length; i++) {
@@ -65,12 +81,53 @@ public final class LauncherSettingsActivity extends Activity {
         }
         // Keep the numeric choices increasing in the Hebrew reading direction. Reorder the
         // actual views so D-pad focus follows their positions without changing the saved values.
+        int[] strengthIds = {R.id.strength30, R.id.strength42, R.id.strength54, R.id.strength66};
+        int[] speedIds = {R.id.speed50, R.id.speed100, R.id.speed150, R.id.speed200};
+        for (int i = 0; i < 4; i++) {
+            final int strength = STRENGTHS[i], speed = SPEEDS[i];
+            strengthChoices[i] = findViewById(strengthIds[i]);
+            strengthChoices[i].setOnClickListener(v -> {
+                if (waveStrength == strength) return;
+                waveStrength = strength;
+                choices.edit().putInt(Config.WAVE_STRENGTH_KEY, strength).apply();
+                setResult(RESULT_OK);
+                refresh();
+            });
+            speedChoices[i] = findViewById(speedIds[i]);
+            speedChoices[i].setOnClickListener(v -> {
+                if (waveSpeed == speed) return;
+                waveSpeed = speed;
+                choices.edit().putInt(Config.WAVE_SPEED_KEY, speed).apply();
+                setResult(RESULT_OK);
+                refresh();
+            });
+        }
         if (getResources().getBoolean(R.bool.rtl_app_grid)) {
             reverseRow(columnChoices);
             reverseRow(rowChoices);
+            reverseRow(strengthChoices);
+            reverseRow(speedChoices);
         }
+        themeChoice = findViewById(R.id.themeChoice);
+        themeChoice.setOnClickListener(v -> showThemePicker());
+        waveChoice = findViewById(R.id.waveChoice);
+        waveChoice.setOnClickListener(v -> {
+            wave = !wave;
+            // Choosing the wave again also forgets a crash that switched it off.
+            choices.edit().putBoolean(Config.WAVE_KEY, wave).remove(Config.MOTION_PENDING_KEY).apply();
+            setResult(RESULT_OK);
+            refresh();
+        });
+        findViewById(R.id.themeSettings).setVisibility(
+                themeHasWave || config.wallpaperPicker ? View.VISIBLE : View.GONE);
+        ((TextView) findViewById(R.id.themeSettingsTitle)).setText(
+                getString(R.string.theme_settings_title, themeDisplayName));
+        int waveVisibility = themeHasWave ? View.VISIBLE : View.GONE;
+        waveChoice.setVisibility(waveVisibility);
+        findViewById(R.id.waveDetails).setVisibility(waveVisibility);
         wallpaperChoice = findViewById(R.id.wallpaperChoice);
         wallpaperChoice.setOnClickListener(v -> showWallpaperPicker());
+        wallpaperChoice.setVisibility(config.wallpaperPicker ? View.VISIBLE : View.GONE);
         animationsChoice = findViewById(R.id.animationsChoice);
         animationsChoice.setOnClickListener(v -> {
             animations = !animations;
@@ -97,12 +154,14 @@ public final class LauncherSettingsActivity extends Activity {
         followThemeChoice.setOnClickListener(v -> {
             if (!hasOnTvChoices()) return;
             choices.edit().remove("columns").remove(Config.ROWS_BELOW_DOCK_KEY).remove("animations")
-                    .remove("advanced_effects").remove(Config.WALLPAPER_CHOICE_KEY).commit();
+                    .remove("advanced_effects").remove(Config.WALLPAPER_CHOICE_KEY).remove(Config.WAVE_KEY)
+                    .remove(Config.WAVE_STRENGTH_KEY).remove(Config.WAVE_SPEED_KEY).commit();
             Config current = Config.load(this);
             columns = current.columns;
             rowsBelowDock = current.rowsBelowDock;
             animations = current.animations;
             advancedEffects = current.animations && current.advancedEffects;
+            loadWave(current);
             setResult(RESULT_OK);
             refresh();
         });
@@ -120,6 +179,21 @@ public final class LauncherSettingsActivity extends Activity {
         LinearLayout row = (LinearLayout) views[0].getParent();
         row.removeAllViews();
         for (int i = views.length - 1; i >= 0; i--) row.addView(views[i]);
+    }
+
+    private void loadWave(Config config) {
+        wave = config.wallpaperWave;
+        waveStrength = config.wallpaperWaveStrength;
+        waveSpeed = config.wallpaperWaveSpeed;
+    }
+
+    /** Lists the theme pushed to the TV; switching themes is done by pushing another one. */
+    private void showThemePicker() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.theme_label)
+                .setSingleChoiceItems(new String[] {themeDisplayName}, 0, (dialog, which) -> dialog.dismiss())
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     private void showWallpaperPicker() {
@@ -186,6 +260,20 @@ public final class LauncherSettingsActivity extends Activity {
                 getString(advancedEffects ? R.string.on : R.string.off)));
         advancedChoice.setEnabled(animations);
         advancedChoice.setAlpha(animations ? 1f : 0.5f);
+        themeChoice.setText(getString(R.string.theme_state, themeDisplayName));
+        waveChoice.setText(getString(R.string.wave_state, getString(wave ? R.string.on : R.string.off)));
+        // Like advanced effects, the wave only runs with animations on.
+        waveChoice.setEnabled(animations);
+        waveChoice.setAlpha(animations ? 1f : 0.5f);
+        boolean tunable = wave && animations;
+        for (int i = 0; i < 4; i++) {
+            strengthChoices[i].setSelected(waveStrength == STRENGTHS[i]);
+            strengthChoices[i].setEnabled(tunable);
+            strengthChoices[i].setAlpha(tunable ? 1f : 0.5f);
+            speedChoices[i].setSelected(waveSpeed == SPEEDS[i]);
+            speedChoices[i].setEnabled(tunable);
+            speedChoices[i].setAlpha(tunable ? 1f : 0.5f);
+        }
         String wallpaperCurrent = choices.getString(Config.WALLPAPER_CHOICE_KEY, null);
         wallpaperChoice.setText(getString(R.string.wallpaper_state,
                 "none".equals(wallpaperCurrent) ? getString(R.string.wallpaper_none)
@@ -197,7 +285,8 @@ public final class LauncherSettingsActivity extends Activity {
     private boolean hasOnTvChoices() {
         return choices.contains("columns") || choices.contains(Config.ROWS_BELOW_DOCK_KEY)
                 || choices.contains("animations") || choices.contains("advanced_effects")
-                || choices.contains(Config.WALLPAPER_CHOICE_KEY);
+                || choices.contains(Config.WALLPAPER_CHOICE_KEY) || choices.contains(Config.WAVE_KEY)
+                || choices.contains(Config.WAVE_STRENGTH_KEY) || choices.contains(Config.WAVE_SPEED_KEY);
     }
 
     private void open(Intent intent) {

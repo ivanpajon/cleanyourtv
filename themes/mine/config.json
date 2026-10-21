@@ -1,8 +1,12 @@
 {
+  "name": "Aurora",
+  "wallpaper_picker": false,
   "background_color": "#070A14",
   "wallpaper": true,
   "wallpaper_rotation_seconds": 15,
   "wallpaper_fade_seconds": 4,
-  "wallpaper_motion": true,
+  "wallpaper_motion_wave": true,
+  "wallpaper_motion_wave_strength": 30,
+  "wallpaper_motion_wave_speed": 100,
   "advanced_effects": true
 }
